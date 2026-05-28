@@ -1,6 +1,6 @@
 # 手机端 frp 客户端配置
 # 替换 serverAddr 为你的腾讯云服务器公网 IP
-serverAddr = "134.175.97.30"
+serverAddr = "你的云服务器IP"
 serverPort = 7000
 
 [[proxies]]
