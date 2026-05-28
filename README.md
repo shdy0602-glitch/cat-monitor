@@ -1,6 +1,6 @@
-# Cat Breath Rate Monitor v1.1
+# Cat Breath Rate Monitor v1.2
 
-非接触式猫咪呼吸频率监测。安卓手机 + 云服务器，YOLOv8n 猫检测 + Farneback 光流 + FFT 频域分析，超阈值飞书群告警。
+非接触式猫咪呼吸频率监测。安卓手机 + 云服务器，YOLOv8n 猫检测 + Farneback 光流 + 峰计数 + FFT 交叉验证，超阈值飞书群告警。
 
 ## 架构
 
@@ -18,11 +18,11 @@
 ## 检测流程
 
 ```
-每5分钟: 抓30秒快照(2fps) → YOLOv8n 猫检测 → 静止判定
+每5分钟: 抓30秒快照(1.3fps) → YOLOv8n 猫检测 → 静止判定(35%漂移)
                                     ↓ 静止
-                              Farneback 光流(躯干ROI)
+                              Farneback 光流(躯干ROI 30-70%)
                                     ↓
-                              FFT 频域分析(0.2~1.0Hz)
+                              峰计数(主) + FFT 交叉验证(0.17-1.2Hz)
                                     ↓
                               呼吸频率 → CSV + 飞书告警
 ```
@@ -88,11 +88,11 @@ python cat_monitor.py
 
 ## 技术栈
 
-YOLOv8n · Farneback Optical Flow · FFT · OpenCV · PyTorch · 飞书 Bot API · frp
+YOLOv8n · Farneback Optical Flow · Peak Counting + FFT · OpenCV · PyTorch · 飞书 Bot API · frp
 
 ## 实测数据
 
-二胖（家猫），静息状态：**28.0 次/分钟**（信噪比 2.1x，漂移 0.6%）
+二胖（家猫），静息状态：**21.6 次/分钟**（人工计数 21-22 bpm，系统测量吻合）
 
 ## 许可
 
