@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir \
     -r requirements.txt
 
 COPY cat_monitor.py .
-COPY yolov8n.pt .
 
 RUN mkdir -p /app/data
 

@@ -1,6 +1,6 @@
-# Cat Breath Rate Monitor v1.2
+# Cat Breath Rate Monitor v2.0
 
-非接触式猫咪呼吸频率监测。安卓手机 + 云服务器，YOLOv8n 猫检测 + Farneback 光流 + 峰计数 + FFT 交叉验证，超阈值飞书群告警。
+非接触式猫咪呼吸频率监测。安卓手机 + 云服务器，4×4 网格光流 + 峰计数 + FFT + 自相关三方法共识，超阈值飞书群告警。**不再依赖 YOLO 物体检测。**
 
 ## 架构
 
@@ -13,24 +13,34 @@
 | IP Webcam | 安卓手机 | 摄像头推流（局域网 8080） |
 | frpc (Termux) | 安卓手机 | TCP 隧道，8080 → 云:18080 |
 | frps | 云服务器 Docker | 接收 frpc 连接 |
-| cat_monitor | 云服务器 Docker | 抓帧 → 检测 → 分析 → 告警 |
+| cat_monitor | 云服务器 Docker | 网格光流检测 → 三方法共识 → 告警 |
 
 ## 检测流程
 
 ```
-每5分钟: 抓30秒快照(1.3fps) → YOLOv8n 猫检测 → 静止判定(35%漂移)
-                                    ↓ 静止
-                              Farneback 光流(躯干ROI 30-70%)
+每5分钟: 抓30秒快照(~1.3fps) → 4×4网格全帧光流
                                     ↓
-                              峰计数(主) + FFT 交叉验证(0.17-1.2Hz)
+                              找到运动最低的5个网格
+                                    ↓
+                              FFT 扫描呼吸频段(0.25-0.8Hz, 15-48bpm)
+                                    ↓
+                              最佳网格 → 峰计数+FFT+自相关三方法共识
                                     ↓
                               呼吸频率 → CSV + 飞书告警
 ```
 
+## 核心特性
+
+- **无 YOLO**：纯光流网格检测，不受猫姿势、光线影响
+- **网格锁定**：3 轮热身期后锁定最佳检测区域，稳定性提升
+- **三方法共识**：峰计数 + FFT + 自相关加权平均，谐波/次谐波自动抑制
+- **历史权重**：FFT 峰靠近近期均值时获得 1.5× 加成
+- **次谐波校正**：检测到半频信号时自动修正到真实频率
+
 ## 告警规则
 
 - **呼吸急促**：> 35 次/分钟 → 飞书群推送（同类 30 分钟冷却）
-- **每小时汇总**：推送过去 1 小时检测次数和每次呼吸频率；0 次检测时报警
+- **每小时汇总**：推送过去 1 小时每次检测结果和信号质量（逐条列出，不做平均）
 - **飞书接入**：App ID + Secret 方式，调用 `im/v1/messages` API
 
 ## 部署
@@ -39,7 +49,7 @@
 
 安卓手机安装 IP Webcam + Termux + frpc：
 
-```
+```toml
 # frpc.toml
 serverAddr = "你的云服务器IP"
 serverPort = 7000
@@ -82,17 +92,19 @@ python cat_monitor.py
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `CAPTURE_DURATION` | 30s | 每轮采集时长 |
-| `CYCLE_INTERVAL` | 300s | 检测间隔 |
+| `CYCLE_INTERVAL` | 300s | 检测间隔（5 分钟） |
 | `BREATH_RATE_MAX` | 35 | 呼吸告警阈值（次/分钟） |
 | `ALERT_COOLDOWN` | 1800s | 同类告警冷却 |
+| `GRID_ROWS × GRID_COLS` | 4×4 | 网格密度 |
+| `GRID_BREATH_BAND` | 0.25-0.8 Hz | 呼吸频段（15-48 bpm） |
 
 ## 技术栈
 
-YOLOv8n · Farneback Optical Flow · Peak Counting + FFT · OpenCV · PyTorch · 飞书 Bot API · frp
+OpenCV Farneback Optical Flow · Grid Motion Detection · Peak Counting + FFT + Autocorrelation · scipy · 飞书 Bot API · frp
 
 ## 实测数据
 
-二胖（家猫），静息状态：**21.6 次/分钟**（人工计数 21-22 bpm，系统测量吻合）
+二胖（家猫），静息状态：**22-25 次/分钟**（人工计数 21-25 bpm，系统测量吻合）
 
 ## 许可
 
