@@ -1,0 +1,26 @@
+services:
+
+  # 猫咪呼吸监护
+  cat_monitor:
+    build: ..
+    container_name: cat_monitor
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+      - CAMERA_URL=${CAMERA_URL:-http://127.0.0.1:18080/video}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_CHAT_ID=${FEISHU_CHAT_ID}
+    volumes:
+      - ./data:/app/data
+
+  # frp 服务端 — 接收手机视频流穿透
+  frps:
+    image: snowdreamtech/frps
+    container_name: frps
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./frps/frps.toml:/etc/frp/frps.toml

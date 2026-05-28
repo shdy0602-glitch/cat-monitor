@@ -1,0 +1,11 @@
+# 手机端 frp 客户端配置
+# 替换 serverAddr 为你的腾讯云服务器公网 IP
+serverAddr = "134.175.97.30"
+serverPort = 7000
+
+[[proxies]]
+name = "ipwebcam"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8080
+remotePort = 18080
