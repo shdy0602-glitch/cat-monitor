@@ -40,8 +40,8 @@ if not CAMERA_SHOT_URL:
         CAMERA_SHOT_URL = CAMERA_URL.rstrip("/") + "/shot.jpg"
 CAPTURE_DURATION = 30
 CYCLE_INTERVAL = 300
-FRAME_SKIP = 2
-BREATH_RATE_MAX = 35
+FRAME_SKIP = 1
+BREATH_RATE_MAX = 40
 ALERT_COOLDOWN = 1800
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
@@ -67,10 +67,6 @@ _grid_lock = {"locked_cell": None, "cell_history": [], "snr_history": [],
               "warmup_cycles": 3, "lock_threshold": 2, "unlock_snr_ratio": 0.6,
               "unlock_consecutive": 2}
 
-# Historical breath rates for FFT peak weighting
-_rate_history = []  # last N successful breath_rate values
-_RATE_HISTORY_SIZE = 4
-_RATE_HISTORY_BONUS = 1.5  # weight multiplier for FFT peaks near historical mean
 
 
 # ============ STATE / FEISHU ============
@@ -137,7 +133,6 @@ def _analyze_signal(signal_arr, fps_effective):
     """Run peak-counting + autocorrelation + FFT on a 1D signal.
     Returns (breath_rate, debug_dict).  debug_dict has all intermediate values.
     """
-    global _rate_history
     diag = {}
     n = len(signal_arr)
 
@@ -170,7 +165,7 @@ def _analyze_signal(signal_arr, fps_effective):
     smoothed = uniform_filter1d(signal_arr, size=max(3, n // 12))
     distance = max(1, int(fps_effective * 0.3))
     peaks, props = find_peaks(smoothed, distance=distance,
-                               prominence=np.std(smoothed) * 0.04)
+                               prominence=np.std(smoothed) * 0.06)
 
     peak_rate = None
     valid_count = 0
@@ -210,7 +205,7 @@ def _analyze_signal(signal_arr, fps_effective):
         if fft_rate:
             snr_weight = min(1.0, strong[0][1] / (np.median(ba) + 1e-10) / 5)
             # Harmonic suppression: if fft > 25 and another method ≈ fft/2, force low value
-            if fft_rate > 25:
+            if fft_rate > 38:
                 for _name, other_rate in [("peaks", peak_rate), ("ac", ac_rate)]:
                     if other_rate and abs(fft_rate / 2 - other_rate) < 6:
                         snr_weight = 0
@@ -218,18 +213,20 @@ def _analyze_signal(signal_arr, fps_effective):
                         break
             candidates.append(("fft", fft_rate, snr_weight))
 
-        # Historical weighting: boost FFT peaks near recent mean
-        if len(_rate_history) >= 2:
-            hist_mean = np.mean(_rate_history)
-            for fft_bpm, fft_pwr in strong[:4]:
-                if abs(fft_bpm - hist_mean) < 5:
-                    hist_weight = min(1.0, fft_pwr / (np.median(ba) + 1e-10) / 5)
-                    candidates.append(("fft_hist", fft_bpm, hist_weight * _RATE_HISTORY_BONUS))
-                    break  # only boost the closest peak
         if ac_rate and ac_strength > 0.15:
             candidates.append(("ac", ac_rate, ac_strength * 2))
 
-        if not candidates:
+        # High-rate mode: if any method >50, use filtered median
+        high_rate_methods = [c for c in candidates if c[1] > 50]
+        if high_rate_methods:
+            filtered_rates = sorted(set(c[1] for c in candidates if c[1] >= 20))
+            if len(filtered_rates) == 1:
+                breath_rate = filtered_rates[0]
+            elif len(filtered_rates) >= 2:
+                breath_rate = float(np.median(filtered_rates))
+            else:
+                breath_rate = max(c[1] for c in high_rate_methods)  # fallback to max
+        elif not candidates:
             breath_rate = peak_rate
         elif len(candidates) == 1:
             breath_rate = candidates[0][1]
@@ -253,9 +250,9 @@ def _analyze_signal(signal_arr, fps_effective):
                 if is_harmonic:
                     continue
                 phys_weight = weight
-                if 12 <= rate <= 35:
+                if 12 <= rate <= 45:
                     phys_weight *= 1.3
-                elif rate < 10 or rate > 50:
+                elif rate < 10 or rate > 55:
                     phys_weight *= 0.4
                 filtered.append((method, rate, phys_weight))
 
@@ -272,38 +269,18 @@ def _analyze_signal(signal_arr, fps_effective):
                     if others:
                         breath_rate = ac_rate * 0.6 + np.mean(others) * 0.4
 
-            # Sub-harmonic correction
-            if breath_rate and 10 <= breath_rate <= 17:
-                best_sh = None
-                for fft_bpm, _ in strong[:4]:
-                    if abs(fft_bpm - breath_rate * 2) < 8 and 18 <= fft_bpm <= 35:
-                        # Prefer peaks closer to 21 bpm (expected cat resting rate)
-                        score = 1.0 / (abs(fft_bpm - 21) + 1)
-                        if best_sh is None or score > best_sh[1]:
-                            best_sh = (fft_bpm, score)
-                if best_sh:
-                    print(f"  ⚠️  Sub-harmonic: {breath_rate:.1f} → {best_sh[0]:.1f} bpm")
-                    breath_rate = best_sh[0]
-                    diag["sub_harmonic_corrected"] = True
     else:
         breath_rate = peak_rate
 
     if breath_rate is None:
         diag["breath_rate"] = None
         return None, diag, "no_consensus"
-    diag["sub_harmonic_corrected"] = False
-
-    if breath_rate < 10 or breath_rate > 80:
+    if breath_rate < 10 or breath_rate > 120:
         diag["breath_rate"] = None
         return None, diag, "out_of_range"
 
     final_rate = round(float(breath_rate), 1)
     diag["breath_rate"] = final_rate
-
-    # Update rate history for FFT historical weighting
-    _rate_history.append(final_rate)
-    if len(_rate_history) > _RATE_HISTORY_SIZE:
-        _rate_history = _rate_history[-_RATE_HISTORY_SIZE:]
 
     print(f"  📊 Peaks: {diag['peaks_found']} found, {diag['valid_intervals']} valid, "
           f"FFT: {peak_info}  →  {final_rate:.1f} bpm")
@@ -498,17 +475,7 @@ def run_detection():
     print(f"\n{'='*50}")
     print(f"[{timestamp}] Starting detection cycle...")
 
-    # Pre-check camera
-    try:
-        test = requests.get(CAMERA_SHOT_URL, timeout=3)
-        if test.status_code != 200 or len(test.content) < 100:
-            print("  ❌ Camera unreachable")
-            return {"timestamp": timestamp, "breath_rate": None, "reason": "stream_failed"}
-    except Exception:
-        print("  ❌ Camera unreachable")
-        return {"timestamp": timestamp, "breath_rate": None, "reason": "stream_failed"}
-
-    # Capture frames
+    # Capture frames via HTTP snapshot polling (rate-limited)
     frames = []
     frame_timestamps = []
     start = time.time()
@@ -517,8 +484,10 @@ def run_detection():
 
     print("  📷 Capturing snapshots...")
     while time.time() - start < CAPTURE_DURATION:
+        req_start = time.time()
         try:
             resp = requests.get(CAMERA_SHOT_URL, timeout=1)
+            req_elapsed = time.time() - req_start
             if resp.status_code == 200 and len(resp.content) > 100:
                 consecutive_fails = 0
                 img_array = np.frombuffer(resp.content, dtype=np.uint8)
@@ -533,9 +502,12 @@ def run_detection():
                 consecutive_fails += 1
         except Exception:
             consecutive_fails += 1
+            req_elapsed = 999  # skip sleep on error
         if consecutive_fails > 5:
             break
-        time.sleep(0.5)
+        # Rate limit: skip sleep if HTTP was slow (CPU protection)
+        if req_elapsed < 0.3:
+            time.sleep(0.1)
 
     elapsed = time.time() - start
     print(f"  📷 Captured {len(frames)} frames ({frame_count} raw) in {elapsed:.1f}s")
@@ -616,8 +588,13 @@ def check_hourly(state):
         for row in csv.DictReader(f):
             try:
                 t = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
-                if t > one_hour_ago and row.get("breath_rate"):
-                    detections.append((row["timestamp"], row["breath_rate"]))
+                rate_str = row.get("breath_rate", "").strip()
+                if t > one_hour_ago and rate_str:
+                    try:
+                        float(rate_str)  # must be a valid number
+                        detections.append((row["timestamp"], rate_str))
+                    except ValueError:
+                        continue  # skip non-numeric entries like "no_breathing_detected"
             except (ValueError, KeyError):
                 continue
 
